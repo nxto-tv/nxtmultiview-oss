@@ -1,0 +1,1536 @@
+diff --git a/configure b/configure
+index ffa407d..a6c2d60 100755
+--- a/configure
++++ b/configure
+@@ -224,6 +224,7 @@ External library support:
+   --enable-libcelt         enable CELT decoding via libcelt [no]
+   --enable-libcdio         enable audio CD grabbing with libcdio [no]
+   --enable-libcodec2       enable codec2 en/decoding using libcodec2 [no]
++  --enable-libdatachannel  enable WHIP/WHEP via libdatachannel [no]
+   --enable-libdav1d        enable AV1 decoding via libdav1d [no]
+   --enable-libdavs2        enable AVS2 decoding via libdavs2 [no]
+   --enable-libdc1394       enable IIDC-1394 grabbing using libdc1394
+@@ -1914,6 +1915,7 @@ EXTERNAL_LIBRARY_LIST="
+     libcaca
+     libcelt
+     libcodec2
++    libdatachannel
+     libdav1d
+     libdc1394
+     libflite
+@@ -3696,6 +3698,8 @@ wav_demuxer_select="riffdec"
+ wav_muxer_select="riffenc"
+ webm_chunk_muxer_select="webm_muxer"
+ webm_dash_manifest_demuxer_select="matroska_demuxer"
++whip_muxer_deps="libdatachannel"
++whep_demuxer_deps="libdatachannel"
+ wtv_demuxer_select="mpegts_demuxer riffdec"
+ wtv_muxer_select="mpegts_muxer riffenc"
+ xmv_demuxer_select="riffdec"
+@@ -6880,6 +6884,7 @@ enabled libcelt           && require libcelt celt/celt.h celt_decode -lcelt0 &&
+                                die "ERROR: libcelt must be installed and version must be >= 0.11.0."; }
+ enabled libcaca           && require_pkg_config libcaca caca caca.h caca_create_canvas
+ enabled libcodec2         && require libcodec2 codec2/codec2.h codec2_create -lcodec2
++enabled libdatachannel    && require libdatachannel rtc/rtc.h rtcCreatePeerConnection -ldatachannel
+ enabled libdav1d          && require_pkg_config libdav1d "dav1d >= 0.5.0" "dav1d/dav1d.h" dav1d_version
+ enabled libdavs2          && require_pkg_config libdavs2 "davs2 >= 1.6.0" davs2.h davs2_decoder_open
+ enabled libdc1394         && require_pkg_config libdc1394 libdc1394-2 dc1394/dc1394.h dc1394_new
+diff --git a/fftools/ffplay.c b/fftools/ffplay.c
+index 96b0b61..6581666 100644
+--- a/fftools/ffplay.c
++++ b/fftools/ffplay.c
+@@ -2807,6 +2807,7 @@ static int is_realtime(AVFormatContext *s)
+     if(   !strcmp(s->iformat->name, "rtp")
+        || !strcmp(s->iformat->name, "rtsp")
+        || !strcmp(s->iformat->name, "sdp")
++       || !strcmp(s->iformat->name, "whep")
+     )
+         return 1;
+ 
+diff --git a/libavformat/Makefile b/libavformat/Makefile
+index 7ca68a7..f2e8cfc 100644
+--- a/libavformat/Makefile
++++ b/libavformat/Makefile
+@@ -631,6 +631,8 @@ OBJS-$(CONFIG_WEBM_CHUNK_MUXER)          += webm_chunk.o
+ OBJS-$(CONFIG_WEBP_MUXER)                += webpenc.o
+ OBJS-$(CONFIG_WEBVTT_DEMUXER)            += webvttdec.o subtitles.o
+ OBJS-$(CONFIG_WEBVTT_MUXER)              += webvttenc.o
++OBJS-$(CONFIG_WHIP_MUXER)                += whip.o whip_whep.o
++OBJS-$(CONFIG_WHEP_DEMUXER)              += whep.o whip_whep.o
+ OBJS-$(CONFIG_WSAUD_DEMUXER)             += westwood_aud.o
+ OBJS-$(CONFIG_WSAUD_MUXER)               += westwood_audenc.o
+ OBJS-$(CONFIG_WSD_DEMUXER)               += wsddec.o rawdec.o
+diff --git a/libavformat/allformats.c b/libavformat/allformats.c
+index 305fa46..eba5742 100644
+--- a/libavformat/allformats.c
++++ b/libavformat/allformats.c
+@@ -513,6 +513,8 @@ extern const FFOutputFormat ff_webm_chunk_muxer;
+ extern const FFOutputFormat ff_webp_muxer;
+ extern const FFInputFormat  ff_webvtt_demuxer;
+ extern const FFOutputFormat ff_webvtt_muxer;
++extern const FFOutputFormat ff_whip_muxer;
++extern const FFInputFormat  ff_whep_demuxer;
+ extern const FFInputFormat  ff_wsaud_demuxer;
+ extern const FFOutputFormat ff_wsaud_muxer;
+ extern const FFInputFormat  ff_wsd_demuxer;
+diff --git a/libavformat/http.c b/libavformat/http.c
+index ec60bc0..c318117 100644
+--- a/libavformat/http.c
++++ b/libavformat/http.c
+@@ -172,6 +172,7 @@ static const AVOption options[] = {
+     { "basic", "HTTP basic authentication", 0, AV_OPT_TYPE_CONST, { .i64 = HTTP_AUTH_BASIC }, 0, 0, D | E, .unit = "auth_type"},
+     { "send_expect_100", "Force sending an Expect: 100-continue header for POST", OFFSET(send_expect_100), AV_OPT_TYPE_BOOL, { .i64 = -1 }, -1, 1, E },
+     { "location", "The actual location of the data received", OFFSET(location), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, D | E },
++    { "new_location", "The Location header in response", OFFSET(new_location), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, D | E },
+     { "offset", "initial byte offset", OFFSET(off), AV_OPT_TYPE_INT64, { .i64 = 0 }, 0, INT64_MAX, D },
+     { "end_offset", "try to limit the request to bytes preceding this offset", OFFSET(end_off), AV_OPT_TYPE_INT64, { .i64 = 0 }, 0, INT64_MAX, D },
+     { "method", "Override the HTTP method or set the expected HTTP method from a client", OFFSET(method), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, D | E },
+diff --git a/libavformat/rtpdec.c b/libavformat/rtpdec.c
+index 729bf83..b672ab7 100644
+--- a/libavformat/rtpdec.c
++++ b/libavformat/rtpdec.c
+@@ -467,7 +467,7 @@ static int find_missing_packets(RTPDemuxContext *s, uint16_t *first_missing,
+ }
+ 
+ int ff_rtp_send_rtcp_feedback(RTPDemuxContext *s, URLContext *fd,
+-                              AVIOContext *avio)
++                              AVIOContext *avio, int disable_pli)
+ {
+     int len, need_keyframe, missing_packets;
+     AVIOContext *pb;
+@@ -478,7 +478,7 @@ int ff_rtp_send_rtcp_feedback(RTPDemuxContext *s, URLContext *fd,
+     if (!fd && !avio)
+         return -1;
+ 
+-    need_keyframe = s->handler && s->handler->need_keyframe &&
++    need_keyframe = !disable_pli && s->handler && s->handler->need_keyframe &&
+                     s->handler->need_keyframe(s->dynamic_protocol_context);
+     missing_packets = find_missing_packets(s, &first_missing, &missing_mask);
+ 
+diff --git a/libavformat/rtpdec.h b/libavformat/rtpdec.h
+index 5a02e72..1c2024f 100644
+--- a/libavformat/rtpdec.h
++++ b/libavformat/rtpdec.h
+@@ -74,7 +74,7 @@ void ff_rtp_send_punch_packets(URLContext* rtp_handle);
+ int ff_rtp_check_and_send_back_rr(RTPDemuxContext *s, URLContext *fd,
+                                   AVIOContext *avio, int count);
+ int ff_rtp_send_rtcp_feedback(RTPDemuxContext *s, URLContext *fd,
+-                              AVIOContext *avio);
++                              AVIOContext *avio, int disable_pli);
+ 
+ // these statistics are used for rtcp receiver reports...
+ typedef struct RTPStatistics {
+diff --git a/libavformat/rtpdec_h264.c b/libavformat/rtpdec_h264.c
+index 72724c2..44c8083 100644
+--- a/libavformat/rtpdec_h264.c
++++ b/libavformat/rtpdec_h264.c
+@@ -52,6 +52,9 @@ struct PayloadContext {
+ #ifdef DEBUG
+     int packet_types_received[32];
+ #endif
++    int got_sps;
++    int got_pps;
++    int got_idr;
+ };
+ 
+ #ifdef DEBUG
+@@ -177,6 +180,10 @@ static int sdp_parse_fmtp_config_h264(AVFormatContext *s,
+                                                  &par->extradata_size, value);
+         av_log(s, AV_LOG_DEBUG, "Extradata set to %p (size: %d)\n",
+                par->extradata, par->extradata_size);
++        if (ret == 0) {
++            h264_data->got_sps = 1;
++            h264_data->got_pps = 1;
++        }
+         return ret;
+     }
+     return 0;
+@@ -204,6 +211,20 @@ void ff_h264_parse_framesize(AVCodecParameters *par, const char *p)
+     par->height  = atoi(p + 1); // skip the -
+ }
+ 
++static void update_sps_pps_idr_info(PayloadContext *data, uint8_t nal_type) {
++    switch (nal_type) {
++    case 5:
++        data->got_idr = 1;
++        break;
++    case 7:
++        data->got_sps = 1;
++        break;
++    case 8:
++        data->got_pps = 1;
++        break;
++    }
++}
++
+ int ff_h264_handle_aggregated_packet(AVFormatContext *ctx, PayloadContext *data, AVPacket *pkt,
+                                      const uint8_t *buf, int len,
+                                      int skip_between, int *nal_counters,
+@@ -237,6 +258,7 @@ int ff_h264_handle_aggregated_packet(AVFormatContext *ctx, PayloadContext *data,
+                     memcpy(dst, src, nal_size);
+                     if (nal_counters)
+                         nal_counters[(*src) & nal_mask]++;
++                    update_sps_pps_idr_info(data, (*src) & nal_mask);
+                     dst += nal_size;
+                 }
+             } else {
+@@ -304,8 +326,11 @@ static int h264_handle_packet_fu_a(AVFormatContext *ctx, PayloadContext *data, A
+     buf += 2;
+     len -= 2;
+ 
+-    if (start_bit && nal_counters)
+-        nal_counters[nal_type & nal_mask]++;
++    if (start_bit) {
++        if (nal_counters)
++            nal_counters[nal_type & nal_mask]++;
++        update_sps_pps_idr_info(data, nal_type & nal_mask);
++    }
+     return ff_h264_handle_frag_packet(pkt, buf, len, start_bit, &nal, 1);
+ }
+ 
+@@ -338,6 +363,7 @@ static int h264_handle_packet(AVFormatContext *ctx, PayloadContext *data,
+         memcpy(pkt->data, start_sequence, sizeof(start_sequence));
+         memcpy(pkt->data + sizeof(start_sequence), buf, len);
+         COUNT_NAL_TYPE(data, nal);
++        update_sps_pps_idr_info(data, nal & 0x1f);
+         break;
+ 
+     case 24:                   // STAP-A (one packet, multiple nals)
+@@ -409,6 +435,10 @@ static int parse_h264_sdp_line(AVFormatContext *s, int st_index,
+     return 0;
+ }
+ 
++static int h264_need_keyframe(PayloadContext *h264) {
++    return !(h264->got_sps && h264->got_pps && h264->got_idr);
++}
++
+ const RTPDynamicProtocolHandler ff_h264_dynamic_handler = {
+     .enc_name         = "H264",
+     .codec_type       = AVMEDIA_TYPE_VIDEO,
+@@ -418,4 +448,5 @@ const RTPDynamicProtocolHandler ff_h264_dynamic_handler = {
+     .parse_sdp_a_line = parse_h264_sdp_line,
+     .close            = h264_close_context,
+     .parse_packet     = h264_handle_packet,
++    .need_keyframe    = h264_need_keyframe,
+ };
+diff --git a/libavformat/rtpdec_vp9.c b/libavformat/rtpdec_vp9.c
+index 6bbdf48..924065b 100644
+--- a/libavformat/rtpdec_vp9.c
++++ b/libavformat/rtpdec_vp9.c
+@@ -1,5 +1,5 @@
+ /*
+- * RTP parser for VP9 payload format (draft version 02) - experimental
++ * RTP parser for VP9 payload format (RFC 9628) - experimental
+  * Copyright (c) 2015 Thomas Volkert <thomas@homer-conferencing.com>
+  *
+  * This file is part of FFmpeg.
+@@ -47,8 +47,7 @@ static int vp9_handle_packet(AVFormatContext *ctx, PayloadContext *rtp_vp9_ctx,
+ {
+     int has_pic_id, has_layer_idc, has_ref_idc, has_ss_data;
+     av_unused int pic_id = 0, non_key_frame = 0, inter_picture_layer_frame;
+-    av_unused int layer_temporal = -1, layer_spatial = -1, layer_quality = -1;
+-    int ref_fields = 0, has_ref_field_ext_pic_id = 0;
++    av_unused int layer_temporal = -1, layer_spatial = -1;
+     int first_fragment, last_fragment;
+     int rtp_m;
+     int res = 0;
+@@ -68,16 +67,17 @@ static int vp9_handle_packet(AVFormatContext *ctx, PayloadContext *rtp_vp9_ctx,
+      *
+      *      0 1 2 3 4 5 6 7
+      *     +-+-+-+-+-+-+-+-+
+-     *     |I|P|L|F|B|E|V|-| (REQUIRED)
++     *     |I|P|L|F|B|E|V|Z| (REQUIRED)
+      *     +-+-+-+-+-+-+-+-+
+      *
+-     *     I: PictureID present
+-     *     P: Inter-picture predicted layer frame
++     *     I: Picture ID (PID) present
++     *     P: Inter-picture predicted frame
+      *     L: Layer indices present
+      *     F: Flexible mode
+-     *     B: Start of VP9 frame
+-     *     E: End of picture
+-     *     V: Scalability Structure (SS) present
++     *     B: Start of Frame
++     *     E: End of Frame
++     *     V: Scalability Structure (SS) data present
++     *     Z: Not a reference frame for upper spatial layers
+      */
+     has_pic_id     = !!(buf[0] & 0x80);
+     inter_picture_layer_frame = !!(buf[0] & 0x40);
+@@ -89,7 +89,7 @@ static int vp9_handle_packet(AVFormatContext *ctx, PayloadContext *rtp_vp9_ctx,
+ 
+     rtp_m = !!(flags & RTP_FLAG_MARKER);
+ 
+-    /* sanity check for markers: B should always be equal to the RTP M marker */
++    /* sanity check for markers: E should always be equal to the RTP M marker */
+     if (last_fragment != rtp_m) {
+         av_log(ctx, AV_LOG_ERROR, "Invalid combination of B and M marker (%d != %d)\n", last_fragment, rtp_m);
+         return AVERROR_INVALIDDATA;
+@@ -134,72 +134,70 @@ static int vp9_handle_packet(AVFormatContext *ctx, PayloadContext *rtp_vp9_ctx,
+      *
+      *          0 1 2 3 4 5 6 7
+      *         +-+-+-+-+-+-+-+-+
+-     *   L:    | T | S | Q | R | (CONDITIONALLY RECOMMENDED)
++     *   L:    | TID |U| SID |D| (Conditionally RECOMMENDED)
++     *         +-+-+-+-+-+-+-+-+
++     *         |   TL0PICIDX   | (Conditionally REQUIRED)
+      *         +-+-+-+-+-+-+-+-+
+      *
+-     *   T, S and Q are 2-bit indices for temporal, spatial, and quality layers.
+-     *   If "F" is set in the initial octet, R is 2 bits representing the number
+-     *   of reference fields this frame refers to.
++     *   TID: Temporal layer ID (3 bits)
++     *   U: Switching up point (1 bit)
++     *   SID: Spatial layer ID (3 bits)
++     *   D: Inter-layer dependency used (1 bit)
++     *   TL0PICIDX: Temporal Layer 0 Picture Index (8 bits, non-flexible mode only)
+      */
+     if (has_layer_idc) {
+         if (len < 1) {
+             av_log(ctx, AV_LOG_ERROR, "Too short RTP/VP9 packet\n");
+             return AVERROR_INVALIDDATA;
+         }
+-        layer_temporal = buf[0] & 0xC0;
+-        layer_spatial  = buf[0] & 0x30;
+-        layer_quality  = buf[0] & 0x0C;
+-        if (has_ref_idc) {
+-            ref_fields = buf[0] & 0x03;
+-            if (ref_fields)
+-                non_key_frame = 1;
+-        }
++        layer_temporal = buf[0] >> 5;
++        layer_spatial  = (buf[0] >> 1) & 0x07;
+         buf++;
+         len--;
++
++        if (!has_ref_idc) {
++            if (len < 1) {
++                av_log(ctx, AV_LOG_ERROR, "Too short RTP/VP9 packet\n");
++                return AVERROR_INVALIDDATA;
++            }
++            /* ignore TL0PICIDX */
++            buf++;
++            len--;
++        }
+     }
+ 
+     /*
+-     *         decode the reference fields
++     *         decode reference indices
+      *
+      *          0 1 2 3 4 5 6 7
+-     *         +-+-+-+-+-+-+-+-+              -\
+-     *   F:    | PID |X| RS| RQ| (OPTIONAL)    .
+-     *         +-+-+-+-+-+-+-+-+               . - R times
+-     *   X:    | EXTENDED PID  | (OPTIONAL)    .
+-     *         +-+-+-+-+-+-+-+-+              -/
++     *         +-+-+-+-+-+-+-+-+                             -\
++     *   P,F:  | P_DIFF      |N| (Conditionally REQUIRED)    - up to 3 times
++     *         +-+-+-+-+-+-+-+-+                             -/
+      *
+-     *   PID:  The relative Picture ID referred to by this frame.
+-     *   RS and RQ:  The spatial and quality layer IDs.
+-     *   X: 1 if this layer index has an extended relative Picture ID.
++     *   P_DIFF: Relative Picture ID (7 bits)
++     *   N: 1 if another P_DIFF follows
+      */
+-    if (has_ref_idc) {
+-        while (ref_fields) {
++    if (has_ref_idc && inter_picture_layer_frame) {
++        int i, p_diff, has_more;
++        for (i = 0; i < 3; i++) {
+             if (len < 1) {
+                 av_log(ctx, AV_LOG_ERROR, "Too short RTP/VP9 packet\n");
+                 return AVERROR_INVALIDDATA;
+             }
+ 
+-            has_ref_field_ext_pic_id = buf[0] & 0x10;
+-
+-            /* pass ref. field */
+-            if (has_ref_field_ext_pic_id) {
+-                if (len < 2) {
+-                    av_log(ctx, AV_LOG_ERROR, "Too short RTP/VP9 packet\n");
+-                    return AVERROR_INVALIDDATA;
+-                }
+-
+-                /* ignore ref. data */
++            p_diff = buf[0] >> 1;
++            has_more = buf[0] & 0x01;
+ 
+-                buf += 2;
+-                len -= 2;
+-            } else {
++            if (!p_diff) {
++                av_log(ctx, AV_LOG_ERROR, "Invalid P_DIFF value 0\n");
++                return AVERROR_INVALIDDATA;
++            }
+ 
+-                /* ignore ref. data */
++            buf++;
++            len--;
+ 
+-                buf++;
+-                len--;
+-            }
+-            ref_fields--;
++            if (!has_more)
++                break;
+         }
+     }
+ 
+@@ -208,18 +206,30 @@ static int vp9_handle_packet(AVFormatContext *ctx, PayloadContext *rtp_vp9_ctx,
+      *
+      *          0 1 2 3 4 5 6 7
+      *         +-+-+-+-+-+-+-+-+
+-     *   V:    | PATTERN LENGTH|
+-     *         +-+-+-+-+-+-+-+-+                           -\
+-     *         | T | S | Q | R | (OPTIONAL)                 .
+-     *         +-+-+-+-+-+-+-+-+              -\            .
+-     *         | PID |X| RS| RQ| (OPTIONAL)    .            . - PAT. LEN. times
+-     *         +-+-+-+-+-+-+-+-+               . - R times  .
+-     *   X:    | EXTENDED PID  | (OPTIONAL)    .            .
+-     *         +-+-+-+-+-+-+-+-+              -/           -/
++     *   V:    | N_S |Y|G|-|-|-|
++     *         +-+-+-+-+-+-+-+-+              -\
++     *   Y:    |     WIDTH     | (OPTIONAL)    .
++     *         +               +               .
++     *         |               | (OPTIONAL)    .
++     *         +-+-+-+-+-+-+-+-+               . - N_S + 1 times
++     *         |     HEIGHT    | (OPTIONAL)    .
++     *         +               +               .
++     *         |               | (OPTIONAL)    .
++     *         +-+-+-+-+-+-+-+-+              -/
++     *   G:    |      N_G      | (OPTIONAL)
++     *         +-+-+-+-+-+-+-+-+                            -\
++     *   N_G:  | TID |U| R |-|-| (OPTIONAL)                 .
++     *         +-+-+-+-+-+-+-+-+              -\            . - N_G times
++     *         |    P_DIFF     | (OPTIONAL)    . - R times  .
++     *         +-+-+-+-+-+-+-+-+              -/            -/
+      *
+-     *   PID:  The relative Picture ID referred to by this frame.
+-     *   RS and RQ:  The spatial and quality layer IDs.
+-     *   X: 1 if this layer index has an extended relative Picture ID.
++     *   N_S: Number of spatial layers minus 1
++     *   Y: Each spatial layer's resolution present
++     *   G: Picture Group description present
++     *   N_G: Number of pictures in Picture Group
++     *   TID: Temporal layer ID
++     *   U: Switching up point
++     *   R: Number of P_DIFF fields
+      */
+     if (has_ss_data) {
+         int n_s, y, g, i;
+@@ -282,13 +292,6 @@ static int vp9_handle_packet(AVFormatContext *ctx, PayloadContext *rtp_vp9_ctx,
+         }
+     }
+ 
+-    /*
+-     * decode the VP9 payload header
+-     *
+-     *  spec. is tbd
+-     */
+-    //XXX: implement when specified
+-
+     /* sanity check: 1 byte payload as minimum */
+     if (len < 1) {
+         av_log(ctx, AV_LOG_ERROR, "Too short RTP/VP9 packet\n");
+diff --git a/libavformat/rtsp.c b/libavformat/rtsp.c
+index 5ea471b..b22a903 100644
+--- a/libavformat/rtsp.c
++++ b/libavformat/rtsp.c
+@@ -2290,7 +2290,7 @@ redo:
+             AVIOContext *pb = NULL;
+             if (rt->lower_transport == RTSP_LOWER_TRANSPORT_CUSTOM)
+                 pb = s->pb;
+-            ff_rtp_send_rtcp_feedback(rtsp_st->transport_priv, rtsp_st->rtp_handle, pb);
++            ff_rtp_send_rtcp_feedback(rtsp_st->transport_priv, rtsp_st->rtp_handle, pb, 0);
+         }
+         if (ret < 0) {
+             /* Either bad packet, or a RTCP packet. Check if the
+diff --git alibavformat/whep.c b/libavformat/whep.c
+new file mode 100644
+index 0000000..0ba1515
+--- /dev/null
++++ b/libavformat/whep.c
+@@ -0,0 +1,547 @@
++/**
++ * WHEP (WebRTC-HTTP Egress Protocol) demuxer
++ * Copyright (c) 2025
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#include <rtc/rtc.h>
++#include <stdatomic.h>
++#include "avformat.h"
++#include "demux.h"
++#include "libavcodec/codec_id.h"
++#include "libavutil/avstring.h"
++#include "libavutil/opt.h"
++#include "libavutil/mem.h"
++#include "libavutil/time.h"
++#include "libavutil/random_seed.h"
++#include "rtpdec.h"
++#include "whip_whep.h"
++
++static const struct {
++    int pt;
++    const char enc_name[6];
++    enum AVMediaType codec_type;
++    enum AVCodecID codec_id;
++    int clock_rate;
++    int audio_channels;
++} dynamic_payload_types[] = {
++  {96, "VP8", AVMEDIA_TYPE_VIDEO, AV_CODEC_ID_VP8,  90000, -1},
++  {97, "VP9", AVMEDIA_TYPE_VIDEO, AV_CODEC_ID_VP9,  90000, -1},
++  {98, "H264", AVMEDIA_TYPE_VIDEO, AV_CODEC_ID_H264, 90000, -1},
++  {99, "H265", AVMEDIA_TYPE_VIDEO, AV_CODEC_ID_H265, 90000, -1},
++  {111, "OPUS", AVMEDIA_TYPE_AUDIO, AV_CODEC_ID_OPUS, 48000, 2},
++  {-1, "", AVMEDIA_TYPE_UNKNOWN, AV_CODEC_ID_NONE, -1, -1}
++};
++
++static const char *audio_mline =
++    "m=audio 9 UDP/TLS/RTP/SAVPF 111 9 0 8\n"
++    "a=mid:0\n"
++    "a=recvonly\n"
++    "a=rtpmap:111 opus/48000/2\n"
++    "a=fmtp:111 minptime=10;useinbandfec=1;stereo=1;sprop-stereo=1\n"
++    "a=rtpmap:9 G722/8000\n"
++    "a=rtpmap:0 PCMU/8000\n"
++    "a=rtpmap:8 PCMA/8000\n";
++
++static const char *video_mline =
++    "m=video 9 UDP/TLS/RTP/SAVPF 96 97 98 99\n"
++    "a=mid:1\n"
++    "a=recvonly\n"
++    "a=rtpmap:96 VP8/90000\n"
++    "a=rtcp-fb:96 goog-remb\n"
++    "a=rtcp-fb:96 nack\n"
++    "a=rtcp-fb:96 nack pli\n"
++    "a=rtpmap:97 VP9/90000\n"
++    "a=rtcp-fb:97 goog-remb\n"
++    "a=rtcp-fb:97 nack\n"
++    "a=rtcp-fb:97 nack pli\n"
++    "a=rtpmap:98 H264/90000\n"
++    "a=rtcp-fb:98 goog-remb\n"
++    "a=rtcp-fb:98 nack\n"
++    "a=rtcp-fb:98 nack pli\n"
++    "a=fmtp:98 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f\n"
++    "a=rtpmap:99 H265/90000\n"
++    "a=rtcp-fb:99 goog-remb\n"
++    "a=rtcp-fb:99 nack\n"
++    "a=rtcp-fb:99 nack pli\n";
++
++typedef struct Message {
++    int track;
++    uint8_t *data;
++    int size;
++} Message;
++
++typedef struct WHEPContext {
++    AVClass *class;
++    char *token;
++    char *session_url;
++    int64_t pli_period;
++    int64_t last_pli_time;
++
++    // libdatachannel state
++    int pc;
++    int audio_track;
++    int video_track;
++
++    RTPDemuxContext **rtp_ctxs;
++    int rtp_ctxs_count;
++
++    // lock-free ring buffer for messages (rtp packets)
++    Message **buffer;
++    int capacity;
++    atomic_int head;
++    atomic_int tail;
++
++    AVPacket *audio_pkt;
++    AVPacket *video_pkt;
++} WHEPContext;
++
++static int whep_get_sdp_a_line(int track, char *buffer, int size, int payload_type)
++{
++    char *line, *end;
++    char fmtp_prefix[16];
++
++    if (rtcGetTrackDescription(track, buffer, size) < 0)
++        return AVERROR_EXTERNAL;
++    line = buffer;
++    end  = buffer + strlen(buffer);
++    snprintf(fmtp_prefix, sizeof(fmtp_prefix), "a=fmtp:%d", payload_type);
++
++    while (line < end) {
++        char *next_line = strchr(line, '\n');
++        if (next_line)
++            *next_line = '\0';
++
++        while (*line == ' ' || *line == '\t')
++            line++;
++
++        if (av_strstart(line, fmtp_prefix, NULL)) {
++            av_strlcpy(buffer, line + 2, size);
++            return 0;
++        }
++
++        if (next_line) {
++            *next_line = '\n';
++            line = next_line + 1;
++        } else {
++            break;
++        }
++    }
++
++    buffer[0] = '\0';
++    return AVERROR(ENOENT);
++}
++
++static RTPDemuxContext* whep_new_rtp_context(AVFormatContext *s, int payload_type)
++{
++    WHEPContext *whep = s->priv_data;
++    RTPDemuxContext **rtp_ctxs = NULL;
++    RTPDemuxContext *rtp_ctx = NULL;
++    AVStream *st = NULL;
++    const RTPDynamicProtocolHandler *handler = NULL;
++    PayloadContext *dynamic_protocol_context = NULL;
++
++    rtp_ctxs = av_realloc_array(whep->rtp_ctxs, whep->rtp_ctxs_count + 1,
++                                           sizeof(*whep->rtp_ctxs));
++    if (!rtp_ctxs) {
++        av_log(s, AV_LOG_ERROR, "Failed to allocate RTP context array\n");
++        goto fail;
++    }
++    whep->rtp_ctxs = rtp_ctxs;
++
++    st = avformat_new_stream(s, NULL);
++    if (!st) {
++        av_log(s, AV_LOG_ERROR, "Failed to allocate stream\n");
++        goto fail;
++    }
++    if (ff_rtp_get_codec_info(st->codecpar, payload_type) < 0) {
++        for (int i = 0; dynamic_payload_types[i].pt > 0; i++) {
++            if (dynamic_payload_types[i].pt == payload_type) {
++                st->codecpar->codec_id   = dynamic_payload_types[i].codec_id;
++                st->codecpar->codec_type = dynamic_payload_types[i].codec_type;
++
++                if (dynamic_payload_types[i].audio_channels > 0) {
++                    av_channel_layout_uninit(&st->codecpar->ch_layout);
++                    st->codecpar->ch_layout.order       = AV_CHANNEL_ORDER_UNSPEC;
++                    st->codecpar->ch_layout.nb_channels = dynamic_payload_types[i].audio_channels;
++                }
++                if (dynamic_payload_types[i].clock_rate > 0)
++                    st->codecpar->sample_rate = dynamic_payload_types[i].clock_rate;
++                handler = ff_rtp_handler_find_by_name(dynamic_payload_types[i].enc_name,
++                                                     dynamic_payload_types[i].codec_type);
++                break;
++            }
++        }
++    }
++    if (st->codecpar->sample_rate > 0)
++        st->time_base = (AVRational){1, st->codecpar->sample_rate};
++
++    rtp_ctx = ff_rtp_parse_open(s, st, payload_type, RTP_REORDER_QUEUE_DEFAULT_SIZE);
++    if (!rtp_ctx) {
++        av_log(s, AV_LOG_ERROR, "Failed to open RTP context\n");
++        goto fail;
++    }
++    if (handler) {
++        ffstream(st)->need_parsing = handler->need_parsing;
++        dynamic_protocol_context = av_mallocz(handler->priv_data_size);
++        if (!dynamic_protocol_context) {
++            av_log(s, AV_LOG_ERROR, "Failed to allocate dynamic protocol context\n");
++            goto fail;
++        }
++        if (handler->init && handler->init(s, st->index, dynamic_protocol_context) < 0) {
++            av_log(s, AV_LOG_ERROR, "Failed to initialize dynamic protocol context\n");
++            goto fail;
++        }
++        ff_rtp_parse_set_dynamic_protocol(rtp_ctx, dynamic_protocol_context, handler);
++
++        if (handler->parse_sdp_a_line) {
++            char line[SDP_MAX_SIZE];
++            int track_id = (st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) ?
++                          whep->audio_track : whep->video_track;
++            if (whep_get_sdp_a_line(track_id, line, sizeof(line), payload_type) < 0) {
++                av_log(s, AV_LOG_WARNING, "No SDP a-line for payload type %d\n", payload_type);
++            } else {
++                handler->parse_sdp_a_line(s, st->index, dynamic_protocol_context, line);
++            }
++        }
++    }
++
++    whep->rtp_ctxs[whep->rtp_ctxs_count++] = rtp_ctx;
++    return rtp_ctx;
++
++fail:
++    if (rtp_ctx)
++        ff_rtp_parse_close(rtp_ctx);
++    av_free(dynamic_protocol_context);
++    return NULL;
++}
++
++static void message_callback(int id, const char *message, int size, void *ptr)
++{
++    WHEPContext *whep = ptr;
++    Message *msg;
++    int current_head, next, current_tail;
++
++    if (size < 2)
++        return;
++
++    if (RTP_PT_IS_RTCP(message[1]) && size < 8 || size < 12)
++        return;
++
++    // Push packet to ring buffer
++    msg = av_malloc(sizeof(Message));
++    if (!msg) {
++        av_log(whep, AV_LOG_ERROR, "Failed to allocate message\n");
++        return;
++    }
++    msg->track = id;
++    msg->data  = av_memdup(message, size);
++    msg->size  = size;
++
++    if (!msg->data) {
++        av_log(whep, AV_LOG_ERROR, "Failed to duplicate message\n");
++        av_free(msg);
++        return;
++    }
++    current_tail = atomic_load_explicit(&whep->tail, memory_order_relaxed);
++    next         = (current_tail + 1) % whep->capacity;
++    current_head = atomic_load_explicit(&whep->head, memory_order_acquire);
++
++    if (next == current_head) {
++        av_log(whep, AV_LOG_ERROR, "Message buffer is full\n");
++        av_free(msg->data);
++        av_free(msg);
++        return;
++    }
++
++    whep->buffer[current_tail] = msg;
++    atomic_store_explicit(&whep->tail, next, memory_order_release);
++}
++
++static int whep_read_header(AVFormatContext *s)
++{
++    WHEPContext *whep = s->priv_data;
++    rtcConfiguration config = {0};
++
++    ff_whip_whep_init_rtc_logger();
++    s->ctx_flags |= AVFMTCTX_NOHEADER;
++
++    whep->capacity = 1024;
++    whep->buffer = av_calloc(whep->capacity, sizeof(*whep->buffer));
++    if (!whep->buffer) {
++        av_log(s, AV_LOG_ERROR, "Failed to allocate message buffer\n");
++        return AVERROR(ENOMEM);
++    }
++    // Initialize WebRTC peer connection
++    whep->pc = rtcCreatePeerConnection(&config);
++    if (whep->pc <= 0) {
++        av_log(s, AV_LOG_ERROR, "Failed to create peer connection\n");
++        return AVERROR_EXTERNAL;
++    }
++    rtcSetUserPointer(whep->pc, whep);
++
++    // Add audio and video track
++    whep->audio_track = rtcAddTrack(whep->pc, audio_mline);
++    if (whep->audio_track <= 0) {
++        av_log(s, AV_LOG_ERROR, "Failed to add audio track\n");
++        return AVERROR_EXTERNAL;
++    }
++
++    if (rtcSetMessageCallback(whep->audio_track, message_callback) < 0) {
++        av_log(s, AV_LOG_ERROR, "Failed to set audio track message callback\n");
++        return AVERROR_EXTERNAL;
++    }
++
++    whep->video_track = rtcAddTrack(whep->pc, video_mline);
++    if (whep->video_track <= 0) {
++        av_log(s, AV_LOG_ERROR, "Failed to add video track\n");
++        return AVERROR_EXTERNAL;
++    }
++
++    if (rtcSetMessageCallback(whep->video_track, message_callback) < 0) {
++        av_log(s, AV_LOG_ERROR, "Failed to set video track message callback\n");
++        return AVERROR_EXTERNAL;
++    }
++
++    return ff_whip_whep_exchange_and_set_sdp(s, whep->pc, whep->token, &whep->session_url);
++}
++
++static int whep_read_packet(AVFormatContext *s, AVPacket *pkt)
++{
++    WHEPContext *whep = s->priv_data;
++    int current_head, current_tail, ret;
++    Message *msg = NULL;
++    RTPDemuxContext *rtp_ctx = NULL;
++    AVIOContext *dyn_bc = NULL;
++    if (!whep->audio_pkt)
++        whep->audio_pkt = av_packet_alloc();
++    if (!whep->video_pkt)
++        whep->video_pkt = av_packet_alloc();
++
++redo:
++    rtp_ctx = NULL;
++    if (msg) {
++        av_free(msg->data);
++        av_free(msg);
++    }
++    if (rtcIsClosed(whep->audio_track) || rtcIsClosed(whep->video_track)) {
++        av_log(s, AV_LOG_ERROR, "Connection closed\n");
++        return AVERROR_EOF;
++    }
++
++    current_head = atomic_load_explicit(&whep->head, memory_order_relaxed);
++    current_tail = atomic_load_explicit(&whep->tail, memory_order_acquire);
++
++    if (current_head == current_tail)  // empty
++        return AVERROR(EAGAIN);
++    msg = whep->buffer[current_head];
++    atomic_store_explicit(&whep->head, (current_head + 1) % whep->capacity,
++                         memory_order_release);
++
++    if (RTP_PT_IS_RTCP(msg->data[1])) {
++        switch(msg->data[1]) {
++        case RTCP_SR:
++            uint32_t ssrc = (msg->data[4] << 24) | (msg->data[5] << 16) | (msg->data[6] << 8) | msg->data[7];
++            for (int i = 0; i < whep->rtp_ctxs_count; i++) {
++                if (whep->rtp_ctxs[i]->ssrc == ssrc) {
++                    rtp_ctx = whep->rtp_ctxs[i];
++                    break;
++                }
++            }
++            // Send RTCP RR
++            if (rtp_ctx && avio_open_dyn_buf(&dyn_bc) == 0) {
++                int len;
++                uint8_t *dyn_buf = NULL;
++                ff_rtp_check_and_send_back_rr(rtp_ctx, NULL, dyn_bc, 300000);
++                len = avio_close_dyn_buf(dyn_bc, &dyn_buf);
++                if (len > 0 && dyn_buf && rtcSendMessage(msg->track, dyn_buf, len) < 0)
++                    av_log(s, AV_LOG_ERROR, "Failed to send RTCP RR\n");
++                av_free(dyn_buf);
++            }
++            break;
++        default:
++            goto redo;
++        }
++    } else {
++        int payload_type = msg->data[1] & 0x7f;
++        for (int i = 0; i < whep->rtp_ctxs_count; i++) {
++            if (whep->rtp_ctxs[i]->payload_type == payload_type) {
++                rtp_ctx = whep->rtp_ctxs[i];
++                break;
++            }
++        }
++
++        if (!rtp_ctx) {
++            AVCodecParameters par;
++            ret = ff_rtp_get_codec_info(&par, payload_type);
++            if (ret < 0) {
++                for (int i = 0; dynamic_payload_types[i].pt > 0; i++) {
++                    if (dynamic_payload_types[i].pt == payload_type) {
++                        ret = 0;
++                        break;
++                    }
++                }
++            }
++            if (ret == 0) {
++                av_log(s, AV_LOG_DEBUG, "Create RTP context for payload type %d\n", payload_type);
++                rtp_ctx = whep_new_rtp_context(s, payload_type);
++            }
++        }
++    }
++
++    if (!rtp_ctx) {
++        av_log(s, AV_LOG_WARNING, "Failed to get RTP context for message %d\n", msg->data[1]);
++        goto redo;
++    }
++
++    // Parse RTP packet
++    if (msg->track == whep->audio_track)
++        ret = ff_rtp_parse_packet(rtp_ctx, whep->audio_pkt, (uint8_t **)&msg->data, msg->size) < 0;
++    else if (msg->track == whep->video_track)
++        ret = ff_rtp_parse_packet(rtp_ctx, whep->video_pkt, (uint8_t **)&msg->data, msg->size) < 0;
++
++    // Send RTCP feedback
++    if (avio_open_dyn_buf(&dyn_bc) == 0) {
++        int len;
++        uint8_t *dyn_buf = NULL;
++        ff_rtp_send_rtcp_feedback(rtp_ctx, NULL, dyn_bc, 1);
++        len = avio_close_dyn_buf(dyn_bc, &dyn_buf);
++        if (len > 0 && dyn_buf && rtcSendMessage(msg->track, dyn_buf, len) < 0)
++            av_log(s, AV_LOG_ERROR, "Failed to send RTCP feedback\n");
++        av_free(dyn_buf);
++    }
++
++    // Send PLI
++    if (msg->track == whep->video_track && rtp_ctx->ssrc) {
++        int64_t now = av_gettime_relative();
++        if ((whep->pli_period && now - whep->last_pli_time >= whep->pli_period * 1000000) ||
++            (rtp_ctx->handler && rtp_ctx->handler->need_keyframe &&
++            rtp_ctx->handler->need_keyframe(rtp_ctx->dynamic_protocol_context))) {
++            uint32_t source_ssrc = rtp_ctx->ssrc;
++            uint32_t sender_ssrc = source_ssrc + 1;
++            uint8_t pli_packet[] = {
++                (RTP_VERSION << 6) | 1, RTCP_PSFB,         0x00,             0x02,
++                sender_ssrc >> 24,      sender_ssrc >> 16, sender_ssrc >> 8, sender_ssrc,
++                source_ssrc >> 24,      source_ssrc >> 16, source_ssrc >> 8, source_ssrc,
++            };
++            if (rtcSendMessage(msg->track, pli_packet, sizeof(pli_packet)) < 0)
++                av_log(s, AV_LOG_ERROR, "Failed to send PLI\n");
++            else
++                whep->last_pli_time = now;
++        }
++    }
++
++    if (ret != 0)
++        goto redo;
++
++    if (msg->track == whep->audio_track) {
++        av_packet_ref(pkt, whep->audio_pkt);
++        av_packet_free(&whep->audio_pkt);
++    } else if (msg->track == whep->video_track) {
++        av_packet_ref(pkt, whep->video_pkt);
++        av_packet_free(&whep->video_pkt);
++    }
++    av_free(msg->data);
++    av_free(msg);
++    return 0;
++}
++
++static int whep_read_close(AVFormatContext *s)
++{
++    WHEPContext *whep = s->priv_data;
++
++    if (whep->audio_track > 0) {
++        rtcDeleteTrack(whep->audio_track);
++        whep->audio_track = 0;
++    }
++    if (whep->video_track > 0) {
++        rtcDeleteTrack(whep->video_track);
++        whep->video_track = 0;
++    }
++    if (whep->pc > 0) {
++        rtcDeletePeerConnection(whep->pc);
++        whep->pc = 0;
++    }
++
++    if (whep->rtp_ctxs) {
++        for (int i = 0; i < whep->rtp_ctxs_count; i++) {
++            if (whep->rtp_ctxs[i]) {
++                PayloadContext *payload_ctx = whep->rtp_ctxs[i]->dynamic_protocol_context;
++                ff_rtp_parse_close(whep->rtp_ctxs[i]);
++                av_freep(&payload_ctx);
++            }
++        }
++        av_freep(&whep->rtp_ctxs);
++        whep->rtp_ctxs_count = 0;
++    }
++
++    if (whep->buffer) {
++        int head = atomic_load(&whep->head);
++        int tail = atomic_load(&whep->tail);
++
++        while (head != tail) {
++            Message *msg = whep->buffer[head];
++            if (msg) {
++                av_freep(&msg->data);
++                av_freep(&msg);
++            }
++            head = (head + 1) % whep->capacity;
++        }
++        av_freep(&whep->buffer);
++    }
++
++    if (whep->audio_pkt)
++        av_packet_free(&whep->audio_pkt);
++    if (whep->video_pkt)
++        av_packet_free(&whep->video_pkt);
++
++    if (whep->session_url) {
++        ff_whip_whep_delete_session(s, whep->token, whep->session_url);
++        av_freep(&whep->session_url);
++    }
++
++    return 0;
++}
++
++#define OFFSET(x) offsetof(WHEPContext, x)
++static const AVOption whep_options[] = {
++    { "token", "set token to send in the Authorization header as \"Bearer <token>\"",
++        OFFSET(token), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, AV_OPT_FLAG_DECODING_PARAM },
++    { "pli_period", "set interval in seconds for sending periodic PLI (Picture Loss Indication) requests; 0 to disable",
++        OFFSET(pli_period), AV_OPT_TYPE_INT, {.i64 = 0 }, 0, INT_MAX, AV_OPT_FLAG_DECODING_PARAM },
++    { NULL }
++};
++
++static const AVClass whep_class = {
++    .class_name = "WHEP demuxer",
++    .item_name  = av_default_item_name,
++    .option     = whep_options,
++    .version    = LIBAVUTIL_VERSION_INT,
++};
++
++const FFInputFormat ff_whep_demuxer = {
++    .p.name         = "whep",
++    .p.long_name    = NULL_IF_CONFIG_SMALL("WHEP (WebRTC-HTTP Egress Protocol)"),
++    .p.flags        = AVFMT_NOFILE,
++    .p.priv_class   = &whep_class,
++    .priv_data_size = sizeof(WHEPContext),
++    .read_header    = whep_read_header,
++    .read_packet    = whep_read_packet,
++    .read_close     = whep_read_close,
++    .flags_internal = FF_INFMT_FLAG_INIT_CLEANUP,
++};
+diff --git alibavformat/whip.c b/libavformat/whip.c
+new file mode 100644
+index 0000000..b3e8023
+--- /dev/null
++++ b/libavformat/whip.c
+@@ -0,0 +1,307 @@
++/**
++ * WHIP (WebRTC-HTTP Ingestion Protocol) muxer
++ * Copyright (c) 2025
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#include <rtc/rtc.h>
++#include <stdatomic.h>
++#include "avformat.h"
++#include "libavutil/avstring.h"
++#include "libavutil/lfg.h"
++#include "libavutil/opt.h"
++#include "libavutil/mem.h"
++#include "libavutil/time.h"
++#include "libavutil/random_seed.h"
++#include "mux.h"
++#include "rtp.h"
++#include "whip_whep.h"
++
++typedef struct WHIPContext {
++    AVClass *class;
++    char *token;
++    char *session_url;
++
++    // libdatachannel state
++    int pc;
++    int *tracks;
++} WHIPContext;
++
++static int whip_write_header(AVFormatContext *s)
++{
++    WHIPContext *whip = s->priv_data;
++    rtcConfiguration config = {0};
++    AVLFG lfg;
++    char msid[32], cname[32];
++
++    ff_whip_whep_init_rtc_logger();
++
++    // Initialize peer connection
++    memset(&config, 0, sizeof(config));
++    whip->pc = rtcCreatePeerConnection(&config);
++    if (whip->pc <= 0) {
++        av_log(s, AV_LOG_ERROR, "Failed to create peer connection\n");
++        return AVERROR_EXTERNAL;
++    }
++    rtcSetUserPointer(whip->pc, whip);
++
++    // Add tracks based on stream codecs
++    whip->tracks = av_calloc(s->nb_streams, sizeof(*whip->tracks));
++    if (!whip->tracks)
++        return AVERROR(ENOMEM);
++
++    av_lfg_init(&lfg, av_get_random_seed());
++    snprintf(msid, sizeof(msid), "stream-%08x", av_lfg_get(&lfg));
++    snprintf(cname, sizeof(cname), "ffmpeg-%08x", av_lfg_get(&lfg));
++
++    for (unsigned int i = 0, ssrc = av_get_random_seed(); i < s->nb_streams; i++, ssrc++) {
++        int ret = 0;
++        AVStream *st = s->streams[i];
++        rtcTrackInit init = {0};
++        rtcPacketizerInit pinit = {0};
++        char *mid = NULL, *track_id = NULL;
++        int pt = ff_rtp_get_payload_type(NULL, st->codecpar, i);
++
++        if (ssrc == 0) ssrc++;
++
++        init.direction   = RTC_DIRECTION_SENDONLY;
++        init.payloadType = pt;
++        init.ssrc        = ssrc;
++        init.mid         = mid = av_asprintf("%d", i);
++        init.name        = cname;
++        init.msid        = msid;
++        init.trackId     = track_id = av_asprintf("track-%d", i);
++
++        switch (st->codecpar->codec_id) {
++        case AV_CODEC_ID_H264:
++            init.codec    = RTC_CODEC_H264;
++            init.profile  = "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f";
++            st->time_base = (AVRational){1, 90000};
++            break;
++        case AV_CODEC_ID_H265:
++            init.codec    = RTC_CODEC_H265;
++            st->time_base = (AVRational){1, 90000};
++            break;
++        case AV_CODEC_ID_OPUS:
++            init.codec    = RTC_CODEC_OPUS;
++            init.profile  = "minptime=10;useinbandfec=1;stereo=1;sprop-stereo=1";
++            st->time_base = (AVRational){1, 48000};
++            break;
++        case AV_CODEC_ID_PCM_ALAW:
++            if (st->codecpar->sample_rate != 8000 || st->codecpar->ch_layout.nb_channels != 1) {
++                av_log(s, AV_LOG_ERROR, "Unsupported PCMA format %d/%d. Try adding `-ar 8000 -ac 1`.\n",
++                    st->codecpar->sample_rate, st->codecpar->ch_layout.nb_channels);
++                ret = AVERROR(EINVAL);
++                goto fail;
++            }
++            init.codec    = RTC_CODEC_PCMA;
++            st->time_base = (AVRational){1, 8000};
++            break;
++        case AV_CODEC_ID_PCM_MULAW:
++            if (st->codecpar->sample_rate != 8000 || st->codecpar->ch_layout.nb_channels != 1) {
++                av_log(s, AV_LOG_ERROR, "Unsupported PCMU format %d/%d. Try adding `-ar 8000 -ac 1`.\n",
++                    st->codecpar->sample_rate, st->codecpar->ch_layout.nb_channels);
++                ret = AVERROR(EINVAL);
++                goto fail;
++            }
++            init.codec    = RTC_CODEC_PCMU;
++            st->time_base = (AVRational){1, 8000};
++            break;
++        case AV_CODEC_ID_ADPCM_G722:
++            if (st->codecpar->sample_rate != 16000 || st->codecpar->ch_layout.nb_channels!= 1) {
++                av_log(s, AV_LOG_ERROR, "Unsupported G722 format %d/%d. Try adding `-ar 16000 -ac 1`.\n",
++                    st->codecpar->sample_rate, st->codecpar->ch_layout.nb_channels);
++                ret = AVERROR(EINVAL);
++                goto fail;
++            }
++            init.codec    = RTC_CODEC_G722;
++            st->time_base = (AVRational){1, 8000};
++            break;
++        default:
++            av_log(s, AV_LOG_ERROR, "Unsupported codec\n");
++            ret = AVERROR(EINVAL);
++            goto fail;
++        }
++
++        whip->tracks[i] = rtcAddTrackEx(whip->pc, &init);
++        if (whip->tracks[i] <= 0) {
++            av_log(s, AV_LOG_ERROR, "Failed to add track\n");
++            ret = AVERROR_EXTERNAL;
++            goto fail;
++        }
++
++        // Setup packetizer
++        pinit.payloadType = pt;
++        pinit.ssrc       = ssrc;
++        pinit.cname      = cname;
++
++        switch (st->codecpar->codec_id) {
++        case AV_CODEC_ID_H264:
++            pinit.nalSeparator = RTC_NAL_SEPARATOR_START_SEQUENCE;
++            if (rtcSetH264Packetizer(whip->tracks[i], &pinit) < 0) {
++                av_log(s, AV_LOG_ERROR, "Failed to set H264 packetizer\n");
++                ret = AVERROR_EXTERNAL;
++                goto fail;
++            }
++            break;
++        case AV_CODEC_ID_H265:
++            pinit.nalSeparator = RTC_NAL_SEPARATOR_START_SEQUENCE;
++            if (rtcSetH265Packetizer(whip->tracks[i], &pinit) < 0) {
++                av_log(s, AV_LOG_ERROR, "Failed to set H265 packetizer\n");
++                ret = AVERROR_EXTERNAL;
++                goto fail;
++            }
++            break;
++        case AV_CODEC_ID_OPUS:
++            if (rtcSetOpusPacketizer(whip->tracks[i], &pinit) < 0) {
++                av_log(s, AV_LOG_ERROR, "Failed to set Opus packetizer\n");
++                ret = AVERROR_EXTERNAL;
++                goto fail;
++            }
++            break;
++        case AV_CODEC_ID_PCM_ALAW:
++            if (rtcSetPCMAPacketizer(whip->tracks[i], &pinit) < 0) {
++                av_log(s, AV_LOG_ERROR, "Failed to set PCMA packetizer\n");
++                ret = AVERROR_EXTERNAL;
++                goto fail;
++            }
++            break;
++        case AV_CODEC_ID_PCM_MULAW:
++            if (rtcSetPCMUPacketizer(whip->tracks[i], &pinit) < 0) {
++                av_log(s, AV_LOG_ERROR, "Failed to set PCMU packetizer\n");
++                ret = AVERROR_EXTERNAL;
++                goto fail;
++            }
++            break;
++        case AV_CODEC_ID_ADPCM_G722:
++            if (rtcSetG722Packetizer(whip->tracks[i], &pinit) < 0) {
++                av_log(s, AV_LOG_ERROR, "Failed to set G722 packetizer\n");
++                ret = AVERROR_EXTERNAL;
++                goto fail;
++            }
++            break;
++        }
++
++        rtcChainRtcpSrReporter(whip->tracks[i]);
++        rtcChainRtcpNackResponder(whip->tracks[i], 512);
++
++        av_free(mid);
++        av_free(track_id);
++        continue;
++
++fail:
++        av_free(mid);
++        av_free(track_id);
++        return ret;
++    }
++
++    return ff_whip_whep_exchange_and_set_sdp(s, whip->pc, whip->token, &whip->session_url);
++}
++
++static int whip_write_packet(AVFormatContext *s, AVPacket *pkt)
++{
++    WHIPContext *whip = s->priv_data;
++    int track;
++
++    if (pkt->stream_index >= s->nb_streams)
++        return AVERROR(EINVAL);
++
++    track = whip->tracks[pkt->stream_index];
++
++    if (rtcIsClosed(track))
++        return AVERROR_EOF;
++
++    if (rtcIsOpen(track)) {
++        rtcSetTrackRtpTimestamp(track, pkt->pts);
++        if (rtcSendMessage(track, (const char *)pkt->data, pkt->size) < 0) {
++            av_log(s, AV_LOG_ERROR, "Failed to send frame\n");
++            return AVERROR_EXTERNAL;
++        }
++    }
++
++    return 0;
++}
++
++static void whip_deinit(AVFormatContext *s)
++{
++    WHIPContext *whip = s->priv_data;
++
++    if (whip->tracks) {
++        for (int i = 0; i < s->nb_streams; i++) {
++            if (whip->tracks[i] > 0) {
++                rtcDeleteTrack(whip->tracks[i]);
++                whip->tracks[i] = 0;
++            }
++        }
++        av_freep(&whip->tracks);
++    }
++
++    if (whip->pc > 0) {
++        rtcDeletePeerConnection(whip->pc);
++        whip->pc = 0;
++    }
++
++    if (whip->session_url) {
++        ff_whip_whep_delete_session(s, whip->token, whip->session_url);
++        av_freep(&whip->session_url);
++    }
++}
++
++static int whip_query_codec(enum AVCodecID id, int std_compliance)
++{
++    switch (id) {
++    case AV_CODEC_ID_H264:
++    case AV_CODEC_ID_H265:
++    case AV_CODEC_ID_OPUS:
++    case AV_CODEC_ID_PCM_ALAW:
++    case AV_CODEC_ID_PCM_MULAW:
++    case AV_CODEC_ID_ADPCM_G722:
++        return 1;
++    default:
++        return 0;
++    }
++}
++
++#define OFFSET(x) offsetof(WHIPContext, x)
++#define E AV_OPT_FLAG_ENCODING_PARAM
++static const AVOption whip_options[] = {
++    { "token", "set token to send in the Authorization header as \"Bearer <token>\"",
++        OFFSET(token), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, AV_OPT_FLAG_ENCODING_PARAM },
++    { NULL }
++};
++
++static const AVClass whip_class = {
++    .class_name = "WHIP muxer",
++    .item_name  = av_default_item_name,
++    .option     = whip_options,
++    .version    = LIBAVUTIL_VERSION_INT,
++};
++
++const FFOutputFormat ff_whip_muxer = {
++    .p.name         = "whip",
++    .p.long_name    = NULL_IF_CONFIG_SMALL("WHIP (WebRTC-HTTP Ingestion Protocol)"),
++    .p.audio_codec  = AV_CODEC_ID_OPUS,
++    .p.video_codec  = AV_CODEC_ID_H264,
++    .p.flags        = AVFMT_NOFILE,
++    .p.priv_class   = &whip_class,
++    .priv_data_size = sizeof(WHIPContext),
++    .write_header   = whip_write_header,
++    .write_packet   = whip_write_packet,
++    .deinit         = whip_deinit,
++    .query_codec    = whip_query_codec,
++};
+diff --git alibavformat/whip_whep.c b/libavformat/whip_whep.c
+new file mode 100644
+index 0000000..01fb065
+--- /dev/null
++++ b/libavformat/whip_whep.c
+@@ -0,0 +1,153 @@
++/*
++ * WHIP/WHEP shared functions
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#include <rtc/rtc.h>
++
++#include "libavutil/avstring.h"
++#include "libavutil/log.h"
++#include "libavutil/mem.h"
++#include "libavutil/opt.h"
++
++#include "whip_whep.h"
++
++// Convert libdatachannel log level to equivalent ffmpeg log level.
++static int libdatachannel_to_ffmpeg_log_level(int libdatachannel_log_level)
++{
++    if      (libdatachannel_log_level >= RTC_LOG_VERBOSE) return AV_LOG_TRACE;
++    else if (libdatachannel_log_level >= RTC_LOG_DEBUG)   return AV_LOG_DEBUG;
++    else if (libdatachannel_log_level >= RTC_LOG_INFO)    return AV_LOG_VERBOSE;
++    else if (libdatachannel_log_level >= RTC_LOG_WARNING) return AV_LOG_WARNING;
++    else if (libdatachannel_log_level >= RTC_LOG_ERROR)   return AV_LOG_ERROR;
++    else if (libdatachannel_log_level >= RTC_LOG_FATAL)   return AV_LOG_FATAL;
++    else                                                  return AV_LOG_QUIET;
++}
++
++static void libdatachannel_log(rtcLogLevel rtc_level, const char *message)
++{
++    av_log(NULL, libdatachannel_to_ffmpeg_log_level(rtc_level), "[libdatachannel] %s\n", message);
++}
++
++void ff_whip_whep_init_rtc_logger(void)
++{
++    rtcInitLogger(RTC_LOG_VERBOSE, libdatachannel_log);
++}
++
++int ff_whip_whep_exchange_and_set_sdp(AVFormatContext *s, int pc, const char *token, char **session_url)
++{
++    char offer[SDP_MAX_SIZE], offer_hex[2 * SDP_MAX_SIZE], answer[SDP_MAX_SIZE];
++    AVDictionary *options = NULL;
++    AVIOContext *io_ctx = NULL;
++    int ret;
++
++    if (!av_strstart(s->url, "http", NULL)) {
++        av_log(s, AV_LOG_ERROR, "Unsupported URL scheme\n");
++        return AVERROR(EINVAL);
++    }
++
++    if (rtcCreateOffer(pc, offer, sizeof(offer)) < 0) {
++        av_log(s, AV_LOG_ERROR, "Failed to create offer\n");
++        return AVERROR_EXTERNAL;
++    }
++    av_log(s, AV_LOG_DEBUG, "Generated offer: %s\n", offer);
++
++    if (rtcSetLocalDescription(pc, "offer") < 0) {
++        av_log(s, AV_LOG_ERROR, "Failed to set local description\n");
++        return AVERROR_EXTERNAL;
++    }
++
++    av_dict_set(&options, "content_type", "application/sdp", 0);
++    ff_data_to_hex(offer_hex, offer, strlen(offer), 0);
++    av_dict_set(&options, "post_data", offer_hex, 0);
++    if (token) {
++        char* headers = av_asprintf("Authorization: Bearer %s\r\n", token);
++        if (!headers) {
++            av_log(s, AV_LOG_ERROR, "Failed to allocate headers\n");
++            return AVERROR(ENOMEM);
++        }
++        av_dict_set(&options, "headers", headers, 0);
++        av_free(headers);
++    }
++
++    ret = avio_open2(&io_ctx, s->url, AVIO_FLAG_READ, NULL, &options);
++    if (ret < 0) {
++        av_log(s, AV_LOG_ERROR, "Failed to send offer to endpoint: %s\n", av_err2str(ret));
++        goto fail;
++    }
++
++    ret = avio_read(io_ctx, answer, sizeof(answer) - 1);
++    if (ret <= 0) {
++        av_log(s, AV_LOG_ERROR, "Failed to read answer: %s\n",
++               av_err2str(ret));
++        ret = AVERROR(EIO);
++        goto fail;
++    }
++    answer[ret] = 0;
++    av_log(s, AV_LOG_DEBUG, "Received answer: %s\n", answer);
++
++    if (rtcSetRemoteDescription(pc, answer, "answer") < 0) {
++        av_log(s, AV_LOG_ERROR, "Failed to set remote description: %s\n", answer);
++        ret = AVERROR_EXTERNAL;
++        goto fail;
++    }
++
++    if (session_url)
++        av_opt_get(io_ctx, "new_location", AV_OPT_SEARCH_CHILDREN, (uint8_t **)session_url);
++
++    ret = 0;
++fail:
++    avio_closep(&io_ctx);
++    av_dict_free(&options);
++    return ret;
++}
++
++int ff_whip_whep_delete_session(AVFormatContext *s, const char *token, const char *session_url)
++{
++    AVDictionary *options = NULL;
++    AVIOContext *io_ctx = NULL;
++    int ret;
++
++    if (!session_url) {
++        av_log(s, AV_LOG_ERROR, "No session URL provided\n");
++        return AVERROR(EINVAL);
++    }
++    if (!av_strstart(session_url, "http", NULL)) {
++        av_log(s, AV_LOG_ERROR, "Unsupported URL scheme\n");
++        return AVERROR(EINVAL);
++    }
++
++    av_dict_set(&options, "method", "DELETE", 0);
++    if (token) {
++        char* headers = av_asprintf("Authorization: Bearer %s\r\n", token);
++        if (!headers) {
++            av_log(s, AV_LOG_ERROR, "Failed to allocate headers\n");
++            return AVERROR(ENOMEM);
++        }
++        av_dict_set(&options, "headers", headers, 0);
++        av_free(headers);
++    }
++    ret = avio_open2(&io_ctx, session_url, AVIO_FLAG_READ, NULL, &options);
++    if (ret < 0) {
++        av_log(s, AV_LOG_ERROR, "Failed to delete session: %s\n", av_err2str(ret));
++    }
++
++    avio_closep(&io_ctx);
++    av_dict_free(&options);
++    return ret;
++}
+\ No newline at end of file
+diff --git alibavformat/whip_whep.h b/libavformat/whip_whep.h
+new file mode 100644
+index 0000000..62b2c2a
+--- /dev/null
++++ b/libavformat/whip_whep.h
+@@ -0,0 +1,53 @@
++/*
++ * WHIP/WHEP shared functions
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#ifndef AVFORMAT_WHIP_WHEP_H
++#define AVFORMAT_WHIP_WHEP_H
++
++#include "internal.h"
++#define SDP_MAX_SIZE 16384
++
++/**
++ * Init the rtc logger for the WHIP/WHEP.
++ */
++void ff_whip_whep_init_rtc_logger(void);
++
++/**
++ * Exchange and set the SDP for the WHIP/WHEP.
++ *
++ * @param[in]  s           The format context.
++ * @param[in]  pc          The pc id created by libdatachannel.
++ * @param[in]  token       The token to use for the WHIP/WHEP server.
++ * @param[out] session_url The session url from Location header in response; must be freed using av_free().
++ * @return 0 on success, a negative value on error.
++ */
++int ff_whip_whep_exchange_and_set_sdp(AVFormatContext *s, int pc, const char* token, char **session_url);
++
++/**
++ * Delete the session for the WHIP/WHEP.
++ *
++ * @param[in]  s           The format context.
++ * @param[in]  token       The token to use for the WHIP/WHEP server.
++ * @param[in]  session_url The resource url to delete.
++ * @return 0 on success, a negative value on error.
++ */
++int ff_whip_whep_delete_session(AVFormatContext *s, const char *token, const char *session_url);
++
++#endif /* AVFORMAT_WHIP_WHEP_H */
+\ No newline at end of file
