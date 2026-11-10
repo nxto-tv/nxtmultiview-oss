@@ -1,0 +1,26 @@
+diff --git a/cmake/FindWrapOpenGL.cmake b/cmake/FindWrapOpenGL.cmake
+index 7295a159..eba1ae40 100644
+--- a/cmake/FindWrapOpenGL.cmake
++++ b/cmake/FindWrapOpenGL.cmake
+@@ -37,16 +37,12 @@ if (OpenGL_FOUND)
+             set(__opengl_fw_path "-framework OpenGL")
+         endif()
+ 
+-        find_library(WrapOpenGL_AGL NAMES AGL)
+-        if(WrapOpenGL_AGL)
+-            set(__opengl_agl_fw_path "${WrapOpenGL_AGL}")
+-        endif()
+-        if(NOT __opengl_agl_fw_path)
+-            set(__opengl_agl_fw_path "-framework AGL")
+-        endif()
+-
++        # AGL is NOT linked. The framework is gone from the macOS 15 SDK and
++        # later (Xcode 16+), and find_library can still return a stale
++        # AGL.framework from a different SDK or from the system root, which the
++        # linker then cannot find ("ld: framework 'AGL' not found").
++        # Nothing in Qt needs AGL on a current macOS.
+         target_link_libraries(WrapOpenGL::WrapOpenGL INTERFACE ${__opengl_fw_path})
+-        target_link_libraries(WrapOpenGL::WrapOpenGL INTERFACE ${__opengl_agl_fw_path})
+     else()
+         target_link_libraries(WrapOpenGL::WrapOpenGL INTERFACE OpenGL::GL)
+     endif()

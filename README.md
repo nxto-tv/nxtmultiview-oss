@@ -20,7 +20,7 @@ One git tag per application release marks the exact scripts used:
 | libdatachannel 0.24.5+196 | MPL 2.0 | No | https://github.com/paullouisageneau/libdatachannel/tree/1ca898d66e5646ad7b04340cbd57556be02a198e (with its submodules: libjuice `3c40a3545b6b1b62c7adee7f8f2bd58aa290afd6` v1.7.2, libsrtp `24b3bf8f19b6f5ab4cd2bcceb4f4064efca86fd5`, usrsctp `fec583d54493f879d2ae44a743423bf8a04371ab`, plog `94899e0b926ac1b0f4750bfbd495167b4a6ae9ef`, json `55f93686c01528224f448c19128836e7df245f72`) |
 | SRT 1.5.4+11 | MPL 2.0 | No | https://github.com/Haivision/srt/tree/1ec61fc04db843ead4bebcb9db90cef8fbdd96d1 |
 | libusb 1.0.30 | LGPL 2.1+ | No | https://github.com/libusb/libusb/releases/tag/v1.0.30 |
-| Qt 6.7.3 | LGPL 3 | No | https://download.qt.io/archive/qt/6.7/6.7.3/single/qt-everywhere-src-6.7.3.tar.xz |
+| Qt 6.7.3 | LGPL 3 | **Yes** (2026-11-10: one accessibility crash fix backported from Qt 6.8, QTBUG-134784, and two build fixes; `qtbase` only; the changed binaries are QtGui and the Cocoa platform plugin) | Upstream archive https://download.qt.io/archive/qt/6.7/6.7.3/single/qt-everywhere-src-6.7.3.tar.xz plus the three patches in `qt/patches/` of this repository, tag `nxtmultiview-1.2.14` |
 
 ## Layout
 
@@ -42,7 +42,8 @@ ffmpeg/
 libusb/prepare_universal_libusb.sh    builds universal libusb 1.0.30 from the upstream tarball
 srt-openssl/prepare_universal_libs.sh builds universal SRT and OpenSSL
 librist/build_librist_universal.sh    builds universal librist
-qt/BUILD.md                           the cmake line and steps used to build Qt 6.7.3
+qt/BUILD.md                           the cmake lines and steps used to build Qt 6.7.3
+qt/patches/                           the three Nextologies patches to Qt 6.7.3 (qtbase), applied in number order
 ```
 
 Note on `whip-whep-7.1.1.patch`: it is an earlier snapshot of the FFmpeg
@@ -72,7 +73,7 @@ Read back from `libavutil.59.39.100.dylib` in the application bundle
    `python3 ../build-script/make_compile_whipwhep.py` then
    `python3 ../build-script/make_universal.py`.
 7. `libusb/prepare_universal_libusb.sh` — universal libusb.
-8. `qt/BUILD.md` — Qt 6.7.3.
+8. `qt/BUILD.md` — Qt 6.7.3, with the patches in `qt/patches/`.
 
 The scripts contain absolute paths of the build machine
 (`/Users/parbat/Utils/...`, `/opt/homebrew/...`). They are published exactly
